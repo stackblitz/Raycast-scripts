@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  CX Briefing — macOS launchd schedule                           ║
+  ╚══════════════════════════════════════════════════════════════════╝
+
+  SETUP (once per machine):
+  ─────────────────────────
+    1. Fill in REPLACE_WITH_* values below (keys, username, node path).
+    2. cp cx-briefing.plist ~/Library/LaunchAgents/com.cx.briefing.plist
+    3. launchctl load ~/Library/LaunchAgents/com.cx.briefing.plist
+
+  TRIGGER OPTIONS — pick one approach, comment out the others:
+  ─────────────────────────────────────────────────────────────
+
+  A) FIXED DAILY TIME (currently set to 07:30)
+     Uses the <StartCalendarInterval> block below.
+     To change time: edit Hour/Minute, then:
+       launchctl unload ~/Library/LaunchAgents/com.cx.briefing.plist
+       launchctl load   ~/Library/LaunchAgents/com.cx.briefing.plist
+
+  B) ON SYSTEM STARTUP / LOGIN
+     Comment out <StartCalendarInterval> and set <RunAtLoad> to <true/>.
+     The briefing will run once every time you log in.
+
+  C) MANUAL TRIGGER ONLY
+     Remove (or comment out) <StartCalendarInterval> and keep <RunAtLoad> <false/>.
+     Run on demand with:
+       launchctl start com.cx.briefing
+     Or use the shortcut script: bash cx-briefing/run-now.sh
+
+  LOGS:
+     tail -f /tmp/cx-briefing.log        ← stdout
+     tail -f /tmp/cx-briefing.error.log  ← errors
+
+  UNINSTALL:
+     launchctl unload ~/Library/LaunchAgents/com.cx.briefing.plist
+     rm ~/Library/LaunchAgents/com.cx.briefing.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cx.briefing</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Find your node path with: which node -->
+    <string>/opt/homebrew/bin/node</string>
+    <!-- Replace REPLACE_WITH_YOUR_USERNAME with your macOS username (run: whoami) -->
+    <string>/Users/REPLACE_WITH_YOUR_USERNAME/Documents/Raycast-scripts/cx-briefing/index.js</string>
+    <!-- Optional: customize hours, e.g. --hours=8 -->
+    <!-- <string>--hours=16</string> -->
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ANTHROPIC_API_KEY</key>
+    <string>REPLACE_WITH_KEY</string>
+    <key>SLACK_BOT_TOKEN</key>
+    <string>REPLACE_WITH_TOKEN</string>
+    <key>FRONT_API_KEY</key>
+    <string>REPLACE_WITH_KEY</string>
+    <!-- Uncomment when Sentry token is ready:
+    <key>SENTRY_AUTH_TOKEN</key>
+    <string>REPLACE_WITH_TOKEN</string>
+    <key>SENTRY_ORG</key>
+    <string>stackblitz</string>
+    -->
+    <key>LOOKBACK_HOURS</key>
+    <string>16</string>
+  </dict>
+
+  <!-- ── OPTION A: Fixed daily time (default: 07:30 local time) ─────────── -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>7</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+  <!-- ── OPTION B: On login/startup ────────────────────────────────────────
+  Set RunAtLoad to <true/> AND remove/comment out StartCalendarInterval above.
+  -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/cx-briefing.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/cx-briefing.error.log</string>
+</dict>
+</plist>
