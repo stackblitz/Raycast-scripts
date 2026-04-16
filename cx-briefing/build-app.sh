@@ -33,13 +33,16 @@ cat > "$SCRIPT_SRC" << APPLESCRIPT_EOF
 
 property projectPath : "$SCRIPT_DIR"
 property nodePath : "$NODE"
-property outputPath : "/tmp/cx-briefing-output.html"
 property hours : "16"
 property queryNewURL : "$QUERY_NEW_URL"
 property queryDashboardURL : "$QUERY_DASHBOARD_URL"
 property queryTicketAnalyzerURL : "$QUERY_TICKET_ANALYZER_URL"
+-- Output path is set per run (see on run): ~/cx-briefing-output.html so the
+-- same path is visible to Claude Write and to `open` (avoids /tmp edge cases).
 
 on run
+  -- Per-user path; must match what we tell Claude in STEP 4
+  set outputPath to do shell script "printf '%s/cx-briefing-output.html' \"$HOME\""
   set envFile to projectPath & "/.env"
 
   -- Check .env
@@ -105,7 +108,7 @@ After saving output only this line: FILE:" & outputPath
   set the clipboard to thePrompt
 
   -- Open Claude Desktop with a new chat
-  display notification "Opening Claude Desktop for Slack briefing..." with title "CX Briefing" subtitle "Step 2 of 2 — takes ~90 seconds"
+  display notification "Opening Claude Desktop for Slack briefing..." with title "CX Briefing" subtitle "Step 2 of 2 — may take several minutes"
   do shell script "open 'claude://new'"
   delay 3
 
@@ -120,14 +123,14 @@ After saving output only this line: FILE:" & outputPath
     end tell
   end tell
 
-  -- Watch for the output file (max 3 minutes)
+  -- Watch for the output file (Slack + HTML often exceeds 3 min — allow 20 min)
+  set maxWait to 1200
   set waited to 0
-  repeat while waited < 180
-    delay 3
-    set waited to waited + 3
+  repeat while waited < maxWait
+    delay 2
+    set waited to waited + 2
     try
       do shell script "test -f " & quoted form of outputPath & " && test -s " & quoted form of outputPath
-      -- File exists and has content — open it
       delay 1
       do shell script "open " & quoted form of outputPath
       display notification "Dashboard opened in your browser!" with title "CX Briefing" subtitle "Ready!"
@@ -135,8 +138,16 @@ After saving output only this line: FILE:" & outputPath
     end try
   end repeat
 
-  -- Timeout — Claude Desktop might not have Write tool access
-  display notification "Check Claude Desktop — briefing is in the chat" with title "CX Briefing" subtitle "No HTML file was written"
+  -- Claude may finish in the last few seconds after the loop
+  try
+    do shell script "test -f " & quoted form of outputPath & " && test -s " & quoted form of outputPath
+    do shell script "open " & quoted form of outputPath
+    display notification "Dashboard opened in your browser!" with title "CX Briefing" subtitle "Ready (detected right after wait)"
+    return
+  end try
+
+  -- Still no file: remind where it should be + optional manual open
+  display notification "No file yet at ~/cx-briefing-output.html — check Claude Write tool" with title "CX Briefing" subtitle "Ask Claude to save HTML to that path, then open it"
   tell application "Claude" to activate
 end run
 APPLESCRIPT_EOF
