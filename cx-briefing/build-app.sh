@@ -37,12 +37,11 @@ property hours : "16"
 property queryNewURL : "$QUERY_NEW_URL"
 property queryDashboardURL : "$QUERY_DASHBOARD_URL"
 property queryTicketAnalyzerURL : "$QUERY_TICKET_ANALYZER_URL"
--- Output path is set per run (see on run): ~/cx-briefing-output.html so the
--- same path is visible to Claude Write and to `open` (avoids /tmp edge cases).
+-- Output file lives IN the cx-briefing folder: Claude Desktop's Write tool
+-- often cannot save under $HOME (sandbox); project paths usually work.
 
 on run
-  -- Per-user path; must match what we tell Claude in STEP 4
-  set outputPath to do shell script "printf '%s/cx-briefing-output.html' \"$HOME\""
+  set outputPath to projectPath & "/cx-briefing-output.html"
   set envFile to projectPath & "/.env"
 
   -- Check .env
@@ -100,8 +99,9 @@ The HTML must have inline CSS only (no external dependencies) and include:
 - Cards for: Incidents & Bugs | Product Updates | CX Highlights | Support Queue | Engineering Signals
 - Each card shows relevant items with timestamps. Empty cards show 'All quiet'.
 
-STEP 4 — Save the file
-Use the Write tool to save the complete HTML to exactly this path: " & outputPath & "
+STEP 4 — Save the file (Write tool only)
+Save the complete HTML to exactly this path (POSIX, do not change it — do not use ~/ or a Cowork outputs folder; if Write is denied, add this cx-briefing folder as a project in Claude Desktop and retry):
+" & outputPath & "
 After saving output only this line: FILE:" & outputPath
 
   -- Copy prompt to clipboard
@@ -146,8 +146,20 @@ After saving output only this line: FILE:" & outputPath
     return
   end try
 
-  -- Still no file: remind where it should be + optional manual open
-  display notification "No file yet at ~/cx-briefing-output.html — check Claude Write tool" with title "CX Briefing" subtitle "Ask Claude to save HTML to that path, then open it"
+  -- Fallbacks if Write used another path (older prompts or sandbox quirks)
+  set homeOut to do shell script "printf '%s/cx-briefing-output.html' \"$HOME\""
+  set fallbackList to {homeOut, "/tmp/cx-briefing-output.html"}
+  repeat with altPath in fallbackList
+    set p to contents of altPath
+    try
+      do shell script "test -f " & quoted form of p & " && test -s " & quoted form of p
+      do shell script "open " & quoted form of p
+      display notification "Dashboard opened (fallback path)" with title "CX Briefing" subtitle p
+      return
+    end try
+  end repeat
+
+  display notification "No briefing HTML found — check Write tool" with title "CX Briefing" subtitle "Expected: cx-briefing-output.html in project folder"
   tell application "Claude" to activate
 end run
 APPLESCRIPT_EOF
