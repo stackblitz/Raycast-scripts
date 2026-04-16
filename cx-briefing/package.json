@@ -1,0 +1,15 @@
+{
+  "name": "cx-briefing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily CX shift briefing — Slack + Front + Sentry → Claude → HTML dashboard",
+  "scripts": {
+    "start": "node index.js",
+    "8h": "node index.js --hours=8",
+    "24h": "node index.js --hours=24",
+    "slack-json-stub": "node index.js --mode=slack-json-stub"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

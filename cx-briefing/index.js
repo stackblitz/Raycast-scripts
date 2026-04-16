@@ -4,6 +4,10 @@
 /**
  * CX Daily Briefing
  *
+ * Prototype for Phase D of the CX Operations app (see CX_OPERATIONS_APP_PLAN.md
+ * in the Raycast-scripts repo): same connectors + summary idea; production
+ * target is the internal app BFF + scheduled job + UI route, not this script.
+ *
  * Fetches data from Slack, Front, and Sentry then opens an HTML dashboard.
  * Works WITHOUT an Anthropic API key — generates a structured data dashboard.
  * If ANTHROPIC_API_KEY is set, Claude adds an AI-synthesized summary on top.
@@ -11,19 +15,22 @@
  * Usage:
  *   node index.js                       # 16h lookback (default)
  *   node index.js --hours=8             # custom window
- *   node index.js --slack-json=/tmp/x   # use pre-fetched Slack data (MCP mode)
+ *   node index.js --slack-json=/tmp/x   # Slack from file (Claude Desktop MCP export / merged JSON)
+ *   node index.js --no-slack-api       # skip Slack REST even if SLACK_BOT_TOKEN is set (pair with --slack-json)
  *
  * Required env (at least one data source):
  *   FRONT_API_KEY       — Front token (Conversations:Read, Tags:Read, Inboxes:Read)
- *   SLACK_BOT_TOKEN     — xoxb-... (channels:history, channels:read, groups:history, groups:read)
+ *   SLACK_BOT_TOKEN     — xoxb-... (unless using --slack-json or --no-slack-api)
  *
  * Optional:
  *   ANTHROPIC_API_KEY   — adds AI synthesis layer (not required)
  *   SENTRY_AUTH_TOKEN   — Sentry errors section
  *   SENTRY_ORG          — org slug (default: stackblitz)
  *   LOOKBACK_HOURS      — override default 16h
- *   QUERY_DASHBOARD_URL — internal Query dashboard link shown in briefing
- *   QUERY_TICKET_ANALYZER_URL — internal ticket analyzer link shown in briefing
+ *   QUERY_NEW_URL       — Query.new / Query home (default https://query.new/)
+ *   QUERY_DASHBOARD_URL — Query dashboard deep link in header
+ *   QUERY_TICKET_ANALYZER_URL — ticket analyzer workflow link
+ *   FRONT_APP_BASE_URL  — base for ticket links (default https://app.frontapp.com → …/open/cnv_…)
  */
 
 const https  = require('https');
@@ -56,8 +63,13 @@ const NOW_LABEL = new Date().toLocaleString('en-US', {
   weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   hour: '2-digit', minute: '2-digit',
 });
+const DEFAULT_QUERY_NEW_URL = 'https://query.new/';
 const DEFAULT_QUERY_DASHBOARD_URL = 'https://query-new.utility.stackblitz.dev/dashboard/ba70a056-06d3-4a46-8340-6d18ac188683?chat=collapsed';
 const DEFAULT_QUERY_TICKET_ANALYZER_URL = 'https://query-new.utility.stackblitz.dev/workflows/7ccc7ec0-0de6-4ab2-a5e7-c9c178d29f43/798873df-143f-4632-ac45-ee417a68a47a';
+const DEFAULT_FRONT_APP_BASE = 'https://app.frontapp.com';
+
+const argv = process.argv;
+const NO_SLACK_API = argv.includes('--no-slack-api');
 
 const ENV = {
   claude:    process.env.ANTHROPIC_API_KEY,
@@ -65,8 +77,14 @@ const ENV = {
   front:     process.env.FRONT_API_KEY,
   sentry:    process.env.SENTRY_AUTH_TOKEN,
   sentryOrg: process.env.SENTRY_ORG || 'stackblitz',
+  queryNewUrl: (() => {
+    const v = process.env.QUERY_NEW_URL;
+    if (v === '0' || v === 'false' || v === 'off') return '';
+    return (v != null && v !== '') ? v : DEFAULT_QUERY_NEW_URL;
+  })(),
   queryDashboardUrl: process.env.QUERY_DASHBOARD_URL || DEFAULT_QUERY_DASHBOARD_URL,
   queryTicketAnalyzerUrl: process.env.QUERY_TICKET_ANALYZER_URL || DEFAULT_QUERY_TICKET_ANALYZER_URL,
+  frontAppBase: (process.env.FRONT_APP_BASE_URL || DEFAULT_FRONT_APP_BASE).replace(/\/$/, ''),
 };
 
 const SLACK_CHANNELS = [
@@ -106,18 +124,22 @@ function apiRequest(urlStr, { method = 'GET', headers = {}, body } = {}) {
 
 // ── Slack ──────────────────────────────────────────────────────────────────────
 async function fetchSlackData() {
-  // MCP mode: pre-gathered Slack data passed in as a JSON file
-  const slackJsonArg = process.argv.find(a => a.startsWith('--slack-json='));
+  // MCP / Claude Desktop: pre-gathered Slack JSON (--slack-json=path)
+  const slackJsonArg = argv.find(a => a.startsWith('--slack-json='));
   if (slackJsonArg) {
     const jsonPath = slackJsonArg.split('=')[1];
-    console.log(`→ Slack data from file (MCP mode): ${jsonPath}`);
+    console.log(`→ Slack data from file (Claude Desktop / MCP merge): ${jsonPath}`);
     const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     const total = Object.values(data).reduce((n, ch) => n + (ch.messages?.length || 0), 0);
     console.log(`  ✓ ${total} messages from ${Object.keys(data).length} channels`);
     return data;
   }
 
-  if (!ENV.slack) return { skipped: true, reason: 'No SLACK_BOT_TOKEN' };
+  if (NO_SLACK_API) {
+    return { skipped: true, reason: 'Slack API skipped (--no-slack-api). Use Claude Desktop Slack MCP, save JSON, then run with --slack-json=/path/to.json' };
+  }
+
+  if (!ENV.slack) return { skipped: true, reason: 'No SLACK_BOT_TOKEN (or use --slack-json=… from Claude Desktop MCP)' };
   console.log('→ Fetching Slack...');
 
   const channelMap = {};
@@ -183,11 +205,17 @@ async function fetchFrontData() {
     const urgent  = convs.filter(c =>
       c.tags?.some(t => /urgent|escalat|critical|vip|p[01]|high|churn/i.test(t.name || ''))
     );
-    const fmt = c => ({
-      subject: c.subject,
-      tags:    c.tags?.map(t => t.name) || [],
-      updated: new Date((c.last_message?.created_at || 0) * 1000).toISOString(),
-    });
+    const fmt = c => {
+      const id = c.id || '';
+      const openUrl = id ? `${ENV.frontAppBase}/open/${encodeURIComponent(id)}` : '';
+      return {
+        id,
+        openUrl,
+        subject: c.subject,
+        tags:    c.tags?.map(t => t.name) || [],
+        updated: new Date((c.last_message?.created_at || 0) * 1000).toISOString(),
+      };
+    };
 
     console.log(`  ✓ Front: ${convs.length} open, ${urgent.length} urgent, ${recent.length} in window`);
     return {
@@ -290,6 +318,7 @@ Write a complete self-contained HTML file (inline CSS only, no external deps) to
 The HTML must include:
 - Dark header: "⚡ CX Briefing" + date + status badge (🔴 INCIDENT / 🟡 ELEVATED / 🟢 NORMAL)
 - Quick links row with:
+  - Query.new: ${ENV.queryNewUrl || DEFAULT_QUERY_NEW_URL}
   - Query Dashboard: ${ENV.queryDashboardUrl}
   - Ticket Analyzer: ${ENV.queryTicketAnalyzerUrl}
 - Bold summary box: 2-3 sentences on what happened + what needs attention
@@ -326,13 +355,45 @@ function fmtTime(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
+function buildQueryLinks() {
+  const links = [];
+  if (ENV.queryNewUrl) links.push({ label: 'Query.new', url: ENV.queryNewUrl });
+  if (ENV.queryDashboardUrl) links.push({ label: 'Query dashboard', url: ENV.queryDashboardUrl });
+  if (ENV.queryTicketAnalyzerUrl) links.push({ label: 'Ticket analyzer', url: ENV.queryTicketAnalyzerUrl });
+  return links;
+}
+
 function renderQuickLinks(links = []) {
   const validLinks = links.filter(link => link?.url);
   if (!validLinks.length) return '';
   const linkHTML = validLinks.map(link =>
-    `<a class="quick-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">${esc(link.label)} ↗</a>`
+    `<a class="quick-link" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer"><span class="ql-dot"></span>${esc(link.label)}</a>`
   ).join('');
-  return `<div class="quick-links">${linkHTML}</div>`;
+  return `<div class="quick-strip"><span class="quick-strip-lbl">Launch</span><div class="quick-links">${linkHTML}</div></div>`;
+}
+
+/** Empty Slack JSON shape for Claude Desktop MCP → file → --slack-json */
+function printSlackJsonStub() {
+  const stub = {};
+  for (const ch of SLACK_CHANNELS) stub[ch.name] = { priority: ch.priority, messages: [] };
+  console.error('Save stdout to a .json file, merge channel messages from Slack MCP, then run:');
+  console.error(`  node ${path.basename(process.argv[1])} --no-slack-api --slack-json=/path/to/that.json\n`);
+  process.stdout.write(`${JSON.stringify(stub, null, 2)}\n`);
+}
+
+function frontTicketRow(c) {
+  const tags = (c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+  const body = `
+    <div class="item-top">
+      <span class="hl">${esc(c.subject || '(no subject)')}</span>
+      <span class="meta">${relTime(c.updated)}</span>
+    </div>
+    ${tags ? `<div class="item-tags">${tags}</div>` : ''}
+    ${c.openUrl ? '<div class="item-cta"><span>Open in Front</span><span class="cta-icon">↗</span></div>' : ''}`;
+  if (c.openUrl) {
+    return `<a class="item item-link" href="${esc(c.openUrl)}" target="_blank" rel="noopener noreferrer">${body}</a>`;
+  }
+  return `<div class="item">${body}</div>`;
 }
 
 const CSS = `
@@ -347,9 +408,12 @@ const CSS = `
   body{
     font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
     color:var(--text);min-height:100vh;
-    background:radial-gradient(1200px 600px at 10% -10%,rgba(34,211,238,.18),transparent 55%),
+    background:
+      radial-gradient(circle at 20% 30%,rgba(34,211,238,.08) 0%,transparent 45%),
+      radial-gradient(1200px 600px at 10% -10%,rgba(34,211,238,.18),transparent 55%),
       radial-gradient(900px 500px at 95% 0%,rgba(167,139,250,.16),transparent 50%),
-      linear-gradient(165deg,#020617 0%,#0f172a 38%,#0c1322 100%);
+      linear-gradient(165deg,#020617 0%,#0f172a 38%,#0c1322 100%),
+      repeating-linear-gradient(0deg,transparent,transparent 31px,rgba(148,163,184,.04) 31px,rgba(148,163,184,.04) 32px);
     background-attachment:fixed;
   }
   @keyframes header-shine{
@@ -391,15 +455,18 @@ const CSS = `
   .src{font-size:10px;font-weight:700;padding:4px 9px;border-radius:999px;border:1px solid transparent;transition:transform .15s ease,box-shadow .15s ease}
   .src.on{background:rgba(34,211,238,.12);color:#a5f3fc;border-color:rgba(34,211,238,.25);box-shadow:0 0 12px rgba(34,211,238,.12)}
   .src.off{background:rgba(30,41,59,.6);color:#64748b;border-color:rgba(71,85,105,.4)}
-  .quick-links{margin:14px 0 0;display:flex;gap:10px;flex-wrap:wrap}
+  .quick-strip{margin:16px 0 0;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .quick-strip-lbl{font-size:10px;font-weight:800;letter-spacing:.2em;text-transform:uppercase;color:rgba(148,163,184,.75)}
+  .quick-links{display:flex;gap:10px;flex-wrap:wrap;flex:1;min-width:0}
   .quick-link{
     font-size:12px;font-weight:700;text-decoration:none;padding:10px 16px;border-radius:999px;
     color:#ecfeff;background:linear-gradient(135deg,rgba(34,211,238,.2),rgba(167,139,250,.18));
     border:1px solid rgba(165,243,252,.35);
     box-shadow:0 4px 20px rgba(34,211,238,.15),0 0 0 1px rgba(255,255,255,.06) inset;
     transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,filter .18s ease;
-    cursor:pointer;
+    cursor:pointer;display:inline-flex;align-items:center;gap:8px;
   }
+  .ql-dot{width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg,#22d3ee,#a78bfa);box-shadow:0 0 10px rgba(34,211,238,.7);flex-shrink:0}
   .quick-link:hover{
     transform:translateY(-2px);
     border-color:rgba(244,114,182,.45);
@@ -481,6 +548,12 @@ const CSS = `
     border-color:rgba(34,211,238,.15);
     transform:scale(1.01);
   }
+  a.item-link{text-decoration:none;color:inherit;display:block}
+  a.item-link:hover .hl{color:#fff}
+  a.item-link .item-cta{display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px dashed rgba(148,163,184,.2);font-size:11px;font-weight:700;color:#67e8f9;letter-spacing:.02em}
+  a.item-link:hover .item-cta{color:#a5f3fc}
+  .cta-icon{font-size:13px;opacity:.9}
+  .item-tags{margin-top:6px}
   .item-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
   .hl{font-size:13px;font-weight:600;color:#f8fafc;line-height:1.45}
   .meta{font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0;margin-top:2px}
@@ -557,23 +630,9 @@ function generateRawHTML(data, meta) {
         <div><div class="stat-val">${front.recentCount || 0}</div><div class="stat-lbl">Active last ${meta.hours}h</div></div>
       </div>`;
 
-    const urgentItems = (front.urgentSamples || []).map(c => `
-      <div class="item">
-        <div class="item-top">
-          <span class="hl">${esc(c.subject || '(no subject)')}</span>
-          <span class="meta">${relTime(c.updated)}</span>
-        </div>
-        <div style="margin-top:3px">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>
-      </div>`).join('');
+    const urgentItems = (front.urgentSamples || []).map(c => frontTicketRow(c)).join('');
 
-    const recentItems = !urgentItems ? (front.recentSamples || []).slice(0, 8).map(c => `
-      <div class="item">
-        <div class="item-top">
-          <span class="hl">${esc(c.subject || '(no subject)')}</span>
-          <span class="meta">${relTime(c.updated)}</span>
-        </div>
-        <div style="margin-top:3px">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>
-      </div>`).join('') : '';
+    const recentItems = !urgentItems ? (front.recentSamples || []).slice(0, 8).map(c => frontTicketRow(c)).join('') : '';
 
     const body = stats + (urgentItems || recentItems
       ? `<div style="margin-top:8px;font-size:11px;font-weight:700;color:#64748b;margin-bottom:4px">${urgentItems ? 'URGENT' : 'RECENT'}</div>${urgentItems || recentItems}`
@@ -587,8 +646,9 @@ function generateRawHTML(data, meta) {
   // Slack channel cards
   function slackCards() {
     if (!slack || slack.skipped) {
+      const hint = esc(slack?.reason || 'Add SLACK_BOT_TOKEN, or use Claude Desktop Slack MCP → JSON → node index.js --no-slack-api --slack-json=file.json (see .cursor/skills/cx-briefing-claude-desktop/SKILL.md)');
       return card('💬', 'Slack', 'info', '#94a3b8',
-        `<div class="empty">Slack not connected — add SLACK_BOT_TOKEN to .env or use /cx-briefing in Claude</div>`);
+        `<div class="empty">Slack not in this run.</div><div class="note">${hint}</div>`);
     }
 
     const CHANNEL_META = {
@@ -783,15 +843,15 @@ async function frontSummaryMode() {
     `Inboxes: ${(data.inboxes || []).join(', ')}`,
   ];
   if (data.urgentSamples?.length) {
-    lines.push('\nUrgent tickets:');
+    lines.push('\nUrgent tickets (open in Front):');
     data.urgentSamples.forEach(c =>
-      lines.push(`  • ${c.subject || '(no subject)'} [${(c.tags || []).join(', ')}]`)
+      lines.push(`  • ${c.subject || '(no subject)'} [${(c.tags || []).join(', ')}]${c.openUrl ? ` — ${c.openUrl}` : ''}`)
     );
   }
   if (data.recentSamples?.length) {
     lines.push('\nRecent activity:');
     data.recentSamples.slice(0, 8).forEach(c =>
-      lines.push(`  • ${c.subject || '(no subject)'} [${(c.tags || []).join(', ')}]`)
+      lines.push(`  • ${c.subject || '(no subject)'} [${(c.tags || []).join(', ')}]${c.openUrl ? ` — ${c.openUrl}` : ''}`)
     );
   }
   process.stdout.write(lines.join('\n') + '\n');
@@ -800,6 +860,7 @@ async function frontSummaryMode() {
 // ── Main ───────────────────────────────────────────────────────────────────────
 async function main() {
   if (process.argv.includes('--mode=front-summary')) return frontSummaryMode();
+  if (process.argv.includes('--mode=slack-json-stub')) return printSlackJsonStub();
   console.log(`\n⚡ CX Briefing — last ${HOURS}h\n`);
 
   // Fetch data sources in parallel
@@ -815,10 +876,7 @@ async function main() {
     slack:  !slackData?.skipped,
     front:  !frontData?.skipped,
     sentry: !sentryData?.skipped,
-    queryLinks: [
-      { label: 'Query Dashboard', url: ENV.queryDashboardUrl },
-      { label: 'Ticket Analyzer', url: ENV.queryTicketAnalyzerUrl },
-    ],
+    queryLinks: buildQueryLinks(),
   };
 
   let outPath;
