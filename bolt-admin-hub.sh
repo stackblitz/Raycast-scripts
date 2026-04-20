@@ -16,6 +16,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 ID="${1:-}"
 ACTION="${2:-}"
 
@@ -166,20 +167,18 @@ case "$ACTION" in
     fi
     ;;
   org-rate-limits)
-    # Use script argument as UserID; OrgID from clipboard or prompt
+    # Delegate to org-rate-limits.sh (browser org extraction + prompt); avoids fragile clipboard-only org guessing.
     if [[ -z "$ID" ]]; then
       ID=$(pbpaste | tr -d '\n' | grep -Eo '^\d{4,}$' | head -n1 || true)
     fi
     if [[ -z "$ID" || ! "$ID" =~ ^[0-9]+$ ]]; then
-      echo "Run org-rate-limits.sh <UserID> <OrgID> for direct org rate limits."
-      open_url "${BOLT_ADMIN}"
+      echo "Provide User ID as argument or copy it to clipboard; or run org-rate-limits.sh <UserID> [OrgID]."
+      open_url "${STACKBLITZ_ADMIN}/organizations"
+    elif [[ -x "$SCRIPT_DIR/org-rate-limits.sh" ]]; then
+      exec "$SCRIPT_DIR/org-rate-limits.sh" "$ID"
     else
-      ORGID=$(pbpaste | tr -d '\n' | grep -Eo '^\d+$' | head -n1 || true)
-      if [[ -z "$ORGID" || "$ORGID" == "$ID" ]]; then
-        open_url "${STACKBLITZ_ADMIN}/organizations"
-      else
-        open_url "${BOLT_NEW}/api/rate-limits/org/${ORGID}/${ID}"
-      fi
+      echo "org-rate-limits.sh not found or not executable at $SCRIPT_DIR" >&2
+      open_url "${STACKBLITZ_ADMIN}/organizations"
     fi
     ;;
   *)
