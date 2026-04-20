@@ -10,9 +10,11 @@
 # @raycast.argument1 { "type": "text", "placeholder": "UserID or Email" }
 
 # Documentation:
-# @raycast.description bolt-admin-email-lookup
+# @raycast.description Look up user in StackBlitz admin (by ID or email), then copy User ID and offer rate limits / token reset. For Sites, Bolt DB, Snapshots, etc. use bolt-admin-hub.
 # @raycast.author jorrit_harmamny
 # @raycast.authorURL https://raycast.com/jorrit_harmamny
+#
+# Note: User lookup lives at stackblitz.com/admin; rate limits and product admin at bolt.new. Use bolt-admin-hub.sh for one menu to all admin sections (Sites, Static Hosting, Bolt DB, Token Usage, Snapshots, Netlify).
 
 input="$1"
 
