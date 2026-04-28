@@ -472,6 +472,50 @@ echo "URL: $page_url"
 echo "Copied UserID to clipboard: $USERID"
 [[ -n "$USERNAME" ]] && echo "Detected username: $USERNAME"
 
+SCRIPT_PARENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FRONT_NOTE_SCRIPT="$SCRIPT_PARENT_DIR/front-add-note.sh"
+
+# Offer to log a `/ta`-style note back to the customer's Front contact via API.
+# Pre-fills the dialog with clipboard contents if they look like a Front URL,
+# conversation/contact ID, or email. Skip is the safe default — never auto-posts
+# without an explicit confirmation in the dialog.
+maybe_log_to_front() {
+  local note="$1"
+  if [[ ! -x "$FRONT_NOTE_SCRIPT" ]]; then
+    return 0
+  fi
+  local default=""
+  local clip
+  clip=$(pbpaste 2>/dev/null | head -c 500 | tr -d '\r\n' || true)
+  if [[ "$clip" =~ frontapp\.com || \
+        "$clip" =~ ^cnv_[A-Za-z0-9]+$ || \
+        "$clip" =~ ^crd_[A-Za-z0-9]+$ || \
+        "$clip" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    default="$clip"
+  fi
+  local hint
+  hint=$(/usr/bin/osascript \
+    -e 'on run argv' \
+    -e '  set noteText to item 1 of argv' \
+    -e '  set defaultVal to item 2 of argv' \
+    -e '  tell application "System Events" to activate' \
+    -e '  set msg to "Note: " & noteText & return & return & "Front URL, cnv/crd ID, or customer email:"' \
+    -e '  display dialog msg with title "Log to Front" default answer defaultVal buttons {"Skip", "Post Note"} default button "Post Note" cancel button "Skip"' \
+    -e '  return text returned of result' \
+    -e 'end run' \
+    -- "$note" "$default" 2>/dev/null) || hint=""
+  hint=$(printf '%s' "$hint" | tr -d '\r\n')
+  if [[ -z "$hint" ]]; then
+    echo "Front log: skipped."
+    return 0
+  fi
+  if "$FRONT_NOTE_SCRIPT" "$note" "$hint"; then
+    : # success printed by the called script
+  else
+    echo "Front log: failed (continuing)." >&2
+  fi
+}
+
 # Post-action menu. Use `choose from list` (vs display dialog's 3-button cap)
 # so we can add Token Allocation alongside Rate Limits / Reset Tokens.
 # Cancel must NOT exit non-zero (set -e + bolt-admin.sh's retry loop would
@@ -517,11 +561,13 @@ case "$menu_choice" in
           sleep 1
           # Show updated rate limits
           open "https://bolt.new/api/rate-limits/$USERID"
+          # Front /tr snippet handles the note; no API logging here to avoid
+          # double-prompting for the reset amount.
         else
           echo "Cancelled."
         fi
         ;;
-        
+
       "All")
         confirm=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
           -e "display dialog \"Confirm ALL token reset (including rollovers) for ${USERID}?\" with title \"Confirm Reset\" buttons {\"Cancel\", \"Confirm\"} default button \"Confirm\" cancel button \"Cancel\"" \
@@ -534,6 +580,8 @@ case "$menu_choice" in
           sleep 1
           # Show updated rate limits
           open "https://bolt.new/api/rate-limits/$USERID"
+          # Front /tr snippet handles the note; no API logging here to avoid
+          # double-prompting for the reset amount.
         else
           echo "Cancelled."
         fi
@@ -599,6 +647,9 @@ on run argv
   end try
 end run
 APPLESCRIPT
+        # Optional: log a /ta-style note back to Front via API.
+        ta_note="Tokens Added $(date -u +"%Y-%m-%d") ${millions}M tokens"
+        maybe_log_to_front "$ta_note"
       fi
     fi
     ;;
