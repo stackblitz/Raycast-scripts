@@ -34,7 +34,7 @@ export default function Command() {
         setState({
           status: "error",
           error:
-            "Could not find a numeric User ID on the current page. Try focusing the table row and ensure 'Allow JavaScript from Apple Events' is enabled in your browser.",
+            "Could not find a User ID on the current page. Make sure you're on a StackBlitz admin search results page or user profile page (/admin/users/username), and that 'Allow JavaScript from Apple Events' is enabled in your browser's Developer menu.",
         });
         return;
       }
@@ -107,4 +107,3 @@ export default function Command() {
     />
   );
 }
-

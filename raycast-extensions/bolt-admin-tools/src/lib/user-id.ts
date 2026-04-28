@@ -1,9 +1,7 @@
 import type { BrowserPageContent } from "./browsers";
 
-const URL_ID_REGEX =
-  /\/users\/(\d{1,10})|[?&](?:id|user_id)=([0-9]{1,10})|\/admin\/users\/(\d{1,10})/i;
-const CONTEXT_REGEX =
-  /(ID:|user.?id|user.?number|uid|^\d{1,10}$)[:#\s]*([0-9]{1,10})|\bid[:#\s]*([0-9]{1,10})/gim;
+const URL_ID_REGEX = /\/users\/(\d{1,10})|[?&](?:id|user_id)=([0-9]{1,10})|\/admin\/users\/(\d{1,10})/i;
+const CONTEXT_REGEX = /(ID:|user.?id|user.?number|uid|^\d{1,10}$)[:#\s]*([0-9]{1,10})|\bid[:#\s]*([0-9]{1,10})/gim;
 
 export type ExtractionResult = {
   userId: string;
@@ -14,6 +12,12 @@ export function extractUserId(content: BrowserPageContent): ExtractionResult | n
   const fromUrl = matchFromUrl(content.url) ?? matchFromUrl(content.title);
   if (fromUrl) {
     return { userId: fromUrl, source: "URL or title" };
+  }
+
+  // Highest-priority: explicit ID: prefix injected by browsers.ts JS
+  const fromIdPrefix = matchFromIdPrefix(content.text);
+  if (fromIdPrefix) {
+    return { userId: fromIdPrefix, source: "Admin UI stat" };
   }
 
   const fromContext = matchFromContext(content.text);
@@ -32,6 +36,12 @@ export function extractUserId(content: BrowserPageContent): ExtractionResult | n
   }
 
   return null;
+}
+
+function matchFromIdPrefix(text: string): string | null {
+  if (!text) return null;
+  const match = text.match(/^ID:(\d{4,12})/m);
+  return match ? match[1] : null;
 }
 
 function matchFromUrl(value: string): string | null {
@@ -100,4 +110,3 @@ function matchGenericNumber(text: string): string | null {
   }
   return null;
 }
-

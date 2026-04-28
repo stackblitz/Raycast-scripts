@@ -1,5 +1,4 @@
-const STACKBLITZ_ADMIN_BASE =
-  "https://stackblitz.com/admin/users?commit=Filter&order=id_desc";
+const STACKBLITZ_ADMIN_BASE = "https://stackblitz.com/admin/users?commit=Filter&order=id_desc";
 
 export function buildAdminUrl(identifier: string) {
   const trimmed = identifier.trim();
@@ -13,4 +12,3 @@ export function buildAdminUrl(identifier: string) {
 export function buildRateLimitsUrl(userId: string) {
   return `https://bolt.new/api/rate-limits/${encodeURIComponent(userId)}`;
 }
-

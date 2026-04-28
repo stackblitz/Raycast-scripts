@@ -36,45 +36,66 @@ on run argv
         set theTab to active tab of front window
         set pageURL to URL of theTab
         set pageTitle to title of theTab
-        -- Enhanced JavaScript extraction
         set pageText to ""
         try
-          -- Arc and Dia don't support execute javascript directly
-          if appName is "Arc" or appName is "Dia" then
-            -- For Arc/Dia, we'll rely on selection-based extraction
-            set pageText to ""
-          else
-            -- Chrome, Brave, Edge, Chromium support execute javascript
-            set pageText to execute theTab javascript "
-              try {
-                const text = [];
-                // Get all table rows
-                document.querySelectorAll('tr').forEach(row => {
-                  const cells = row.querySelectorAll('td');
-                  if (cells.length > 0) {
-                    // First cell in row might be the ID
-                    const firstCell = cells[0].textContent.trim();
-                    if (/^\\d{1,10}$/.test(firstCell)) {
-                      text.push('ID:' + firstCell);
+          set pageText to execute theTab javascript "
+            try {
+              const text = [];
+
+              // New admin UI: profile page — .ud-stat-value--mono holds '#ID'
+              const monoStat = document.querySelector('.ud-stat-value--mono');
+              if (monoStat) {
+                const val = monoStat.textContent.trim().replace(/^#/, '');
+                if (/^\\d{4,}$/.test(val)) text.push('ID:' + val);
+              }
+
+              // New admin UI: search results — XHR to first profile link in results table
+              if (text.length === 0 && window.location.search.includes('commit=Filter')) {
+                const scope = document.querySelector('#index_table_users tbody') || document.querySelector('#index_table_users') || document.querySelector('table.index_table') || document;
+                const link = Array.from(scope.querySelectorAll('a[href]'))
+                  .find(function(a) {
+                    return /\\/admin\\/users\\/(?!new(?:[^a-z]|$))(?!new_)[^?#\\/]+$/.test(a.href);
+                  });
+                if (link) {
+                  const xhr = new XMLHttpRequest();
+                  xhr.open('GET', link.href, false);
+                  xhr.send();
+                  if (xhr.status === 200) {
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = xhr.responseText;
+                    const el = tmp.querySelector('.ud-stat-value--mono');
+                    if (el) {
+                      const val = el.textContent.trim().replace(/^#/, '');
+                      if (/^\\d{4,}$/.test(val)) text.push('ID:' + val);
                     }
                   }
-                });
-                // Also try data attributes
-                document.querySelectorAll('[data-user-id], [data-id]').forEach(el => {
-                  const uid = el.getAttribute('data-user-id') || el.getAttribute('data-id');
-                  if (uid && /^\\d{1,10}$/.test(uid)) text.push('ID:' + uid);
-                });
-                // Get text content of the whole body as fallback
-                if (text.length === 0) {
-                  text.push(document.body.innerText);
                 }
-                text.join('\\n');
-              } catch(e) {
-                document.body.innerText || '';
               }
-            "
-            if pageText is missing value then set pageText to ""
-          end if
+
+              // Old admin UI: table rows with numeric IDs in first cell
+              if (text.length === 0) {
+                document.querySelectorAll('tr').forEach(function(row) {
+                  const cells = row.querySelectorAll('td');
+                  if (cells.length > 0) {
+                    const firstCell = cells[0].textContent.trim();
+                    if (/^\\d{1,10}$/.test(firstCell)) text.push('ID:' + firstCell);
+                  }
+                });
+              }
+
+              // Data attributes
+              document.querySelectorAll('[data-user-id], [data-id]').forEach(function(el) {
+                const uid = el.getAttribute('data-user-id') || el.getAttribute('data-id');
+                if (uid && /^\\d{1,10}$/.test(uid)) text.push('ID:' + uid);
+              });
+
+              if (text.length === 0) text.push(document.body.innerText || '');
+              text.join('\\n');
+            } catch(e) {
+              document.body.innerText || '';
+            }
+          "
+          if pageText is missing value then set pageText to ""
         end try
         return pageURL & "\n---TITLE---\n" & pageTitle & "\n---TEXT---\n" & pageText
       end tell
@@ -110,10 +131,13 @@ page_text=$(printf "%s" "$content" | awk 'f{print} /^---TEXT---$/{f=1}')
 echo "Debug: Using browser: $running_app" >&2
 
 # Try several extraction strategies:
-# 1) From URL paths and query parameters
+# 1) Explicit ID: prefix injected by our JavaScript (highest confidence)
+from_id_prefix=$(printf "%s" "$page_text" | grep -Eo '^ID:[0-9]{4,12}' | head -n1 | grep -Eo '[0-9]+' || true)
+
+# 2) From URL paths and query parameters (numeric IDs only — old admin UI)
 from_url=$(printf "%s\n%s\n" "$page_url" "$page_title" | grep -Eo '/users/([0-9]{1,10})|[?&]id=([0-9]{1,10})|/admin/users/([0-9]{1,10})|user_id=([0-9]{1,10})' | grep -Eo '[0-9]{1,10}' | head -n1 || true)
 
-# 2) From page text with expanded patterns (including our ID: prefix)
+# 3) From page text with expanded patterns
 from_context=$(printf "%s" "$page_text" | grep -Eio '(ID:|user.?id|user.?number|uid|^[0-9]{1,10}$)[:#\s]*[0-9]{1,10}|\bid[:#\s]*[0-9]{1,10}' | grep -Eo '[0-9]{1,10}' | head -n1 || true)
 
 # 2b) Try to extract from title if it contains "User ID" or similar
@@ -164,6 +188,7 @@ PY
 
 # Debug with more context
 echo "Debug: Extraction attempts:" >&2
+echo "ID prefix extraction attempt: '$from_id_prefix'" >&2
 echo "URL extraction attempt: '$from_url'" >&2
 echo "Context extraction attempt: '$from_context'" >&2
 echo "Full URL: $page_url" >&2
@@ -216,7 +241,9 @@ APPLESCRIPT
 fi
 
 USERID=""
-if [[ -n "$from_url" ]]; then
+if [[ -n "$from_id_prefix" ]]; then
+  USERID="$from_id_prefix"
+elif [[ -n "$from_url" ]]; then
   USERID="$from_url"
 elif [[ -n "$from_table" ]]; then
   USERID="$from_table"
