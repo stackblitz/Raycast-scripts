@@ -472,6 +472,46 @@ echo "URL: $page_url"
 echo "Copied UserID to clipboard: $USERID"
 [[ -n "$USERNAME" ]] && echo "Detected username: $USERNAME"
 
+SCRIPT_PARENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FRONT_NOTE_SCRIPT="$SCRIPT_PARENT_DIR/front-add-note.sh"
+
+# Offer to log a `/tr`- or `/ta`-style note back to Front via the API.
+# Prompts for the conversation URL/ID (clipboard pre-fills if it looks like
+# Front). Skip is the safe default — never auto-posts without confirmation.
+maybe_log_to_front() {
+  local note="$1"
+  if [[ ! -x "$FRONT_NOTE_SCRIPT" ]]; then
+    return 0
+  fi
+  local default=""
+  local clip
+  clip=$(pbpaste 2>/dev/null | head -c 500 | tr -d '\r\n' || true)
+  if [[ "$clip" =~ frontapp\.com.*cnv_ || "$clip" =~ ^cnv_[A-Za-z0-9]+$ ]]; then
+    default="$clip"
+  fi
+  local hint
+  hint=$(/usr/bin/osascript \
+    -e 'on run argv' \
+    -e '  set noteText to item 1 of argv' \
+    -e '  set defaultVal to item 2 of argv' \
+    -e '  tell application "System Events" to activate' \
+    -e '  set msg to "Note: " & noteText & return & return & "Front conversation URL or cnv_ ID:"' \
+    -e '  display dialog msg with title "Log to Front" default answer defaultVal buttons {"Skip", "Post Note"} default button "Post Note" cancel button "Skip"' \
+    -e '  return text returned of result' \
+    -e 'end run' \
+    -- "$note" "$default" 2>/dev/null) || hint=""
+  hint=$(printf '%s' "$hint" | tr -d '\r\n')
+  if [[ -z "$hint" ]]; then
+    echo "Front log: skipped."
+    return 0
+  fi
+  if "$FRONT_NOTE_SCRIPT" "$note" "$hint"; then
+    : # success printed by the called script
+  else
+    echo "Front log: failed (continuing)." >&2
+  fi
+}
+
 # Post-action menu. Use `choose from list` (vs display dialog's 3-button cap)
 # so we can add Token Allocation alongside Rate Limits / Reset Tokens.
 # Cancel must NOT exit non-zero (set -e + bolt-admin.sh's retry loop would
@@ -517,11 +557,21 @@ case "$menu_choice" in
           sleep 1
           # Show updated rate limits
           open "https://bolt.new/api/rate-limits/$USERID"
+          # Optional: log a /tr-style note back to Front via API.
+          tr_amt=$(/usr/bin/osascript \
+            -e 'tell application "System Events" to activate' \
+            -e "display dialog \"Reset amount in millions (leave blank to skip Front log):\" with title \"Front Note\" default answer \"\" buttons {\"Skip\", \"Continue\"} default button \"Continue\" cancel button \"Skip\"" \
+            -e 'return text returned of result' 2>/dev/null) || tr_amt=""
+          tr_amt=$(printf '%s' "$tr_amt" | tr -d '[:space:]')
+          if [[ -n "$tr_amt" ]]; then
+            tr_note="Token Reset $(date -u +"%Y-%m-%d") ${tr_amt}M tokens"
+            maybe_log_to_front "$tr_note"
+          fi
         else
           echo "Cancelled."
         fi
         ;;
-        
+
       "All")
         confirm=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
           -e "display dialog \"Confirm ALL token reset (including rollovers) for ${USERID}?\" with title \"Confirm Reset\" buttons {\"Cancel\", \"Confirm\"} default button \"Confirm\" cancel button \"Cancel\"" \
@@ -534,6 +584,16 @@ case "$menu_choice" in
           sleep 1
           # Show updated rate limits
           open "https://bolt.new/api/rate-limits/$USERID"
+          # Optional: log a /tr-style note back to Front via API.
+          tr_amt=$(/usr/bin/osascript \
+            -e 'tell application "System Events" to activate' \
+            -e "display dialog \"Total reset amount in millions (leave blank to skip Front log):\" with title \"Front Note\" default answer \"\" buttons {\"Skip\", \"Continue\"} default button \"Continue\" cancel button \"Skip\"" \
+            -e 'return text returned of result' 2>/dev/null) || tr_amt=""
+          tr_amt=$(printf '%s' "$tr_amt" | tr -d '[:space:]')
+          if [[ -n "$tr_amt" ]]; then
+            tr_note="Token Reset $(date -u +"%Y-%m-%d") ${tr_amt}M tokens (all rollovers cleared)"
+            maybe_log_to_front "$tr_note"
+          fi
         else
           echo "Cancelled."
         fi
@@ -599,6 +659,9 @@ on run argv
   end try
 end run
 APPLESCRIPT
+        # Optional: log a /ta-style note back to Front via API.
+        ta_note="Tokens Added $(date -u +"%Y-%m-%d") ${millions}M tokens"
+        maybe_log_to_front "$ta_note"
       fi
     fi
     ;;
