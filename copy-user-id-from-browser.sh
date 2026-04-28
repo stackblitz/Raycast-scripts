@@ -456,17 +456,38 @@ fi
 
 printf "%s" "$USERID" | pbcopy
 
+# Capture username from /admin/users/<username> profile URL (used for the
+# token-allocation form, which keys on username rather than ID).
+USERNAME=""
+if [[ "$page_url" =~ /admin/users/([^?#/]+)/?$ ]]; then
+  candidate="${BASH_REMATCH[1]}"
+  if [[ ! "$candidate" =~ ^[0-9]+$ && "$candidate" != "new" && ! "$candidate" =~ ^new_ ]]; then
+    USERNAME="$candidate"
+  fi
+fi
+
 echo "Detected browser: $running_app"
 echo "Page: $page_title"
 echo "URL: $page_url"
 echo "Copied UserID to clipboard: $USERID"
+[[ -n "$USERNAME" ]] && echo "Detected username: $USERNAME"
 
-# Post-action menu with rate limits and token reset options.
+# Post-action menu. Use `choose from list` (vs display dialog's 3-button cap)
+# so we can add Token Allocation alongside Rate Limits / Reset Tokens.
 # Cancel must NOT exit non-zero (set -e + bolt-admin.sh's retry loop would
-# otherwise spawn this dialog up to max_attempts times).
-menu_choice=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
-  -e "display dialog \"UserID: ${USERID}\n\nWhat would you like to do?\" with title \"Bolt Admin\" buttons {\"Cancel\", \"Reset Tokens\", \"Rate Limits\"} default button \"Rate Limits\" cancel button \"Cancel\"" \
-  -e 'return button returned of result' 2>/dev/null) || menu_choice=""
+# otherwise re-spawn this dialog up to max_attempts times).
+prompt_text="UserID: ${USERID}"
+[[ -n "$USERNAME" ]] && prompt_text="${prompt_text} (${USERNAME})"
+menu_choice=$(/usr/bin/osascript \
+  -e 'on run argv' \
+  -e '  set promptText to item 1 of argv' \
+  -e '  tell application "System Events" to activate' \
+  -e '  set theList to {"Rate Limits", "Reset Tokens", "Add Token Allocation"}' \
+  -e '  set choiceResult to choose from list theList with title "Bolt Admin" with prompt promptText default items {"Rate Limits"} OK button name "Open" cancel button name "Cancel"' \
+  -e '  if choiceResult is false then return ""' \
+  -e '  return (item 1 of choiceResult) as text' \
+  -e 'end run' \
+  -- "$prompt_text" 2>/dev/null) || menu_choice=""
 
 case "$menu_choice" in
   "Rate Limits")
@@ -522,6 +543,66 @@ case "$menu_choice" in
         ;;
     esac
     ;;
+
+  "Add Token Allocation")
+    if [[ -z "$USERNAME" ]]; then
+      /usr/bin/osascript \
+        -e 'tell application "System Events" to activate' \
+        -e 'display alert "No username available" message "Run the lookup from a /admin/users/<username> profile page first."' \
+        2>/dev/null || true
+    else
+      millions=$(/usr/bin/osascript \
+        -e 'tell application "System Events" to activate' \
+        -e "display dialog \"Token amount (millions, 1-200) for ${USERNAME}\" with title \"Token Allocation\" default answer \"10\" buttons {\"Cancel\", \"OK\"} default button \"OK\" cancel button \"Cancel\"" \
+        -e 'return text returned of result' 2>/dev/null) || millions=""
+      millions=$(printf '%s' "$millions" | tr -d '[:space:]')
+
+      if [[ -z "$millions" ]]; then
+        echo "Cancelled."
+      elif ! [[ "$millions" =~ ^([1-9]|[1-9][0-9]|1[0-9]{2}|200)$ ]]; then
+        /usr/bin/osascript \
+          -e 'tell application "System Events" to activate' \
+          -e "display alert \"Invalid token amount\" message \"Enter an integer between 1 and 200 (millions). Got: ${millions}\"" \
+          2>/dev/null || true
+      else
+        tokens=$(( millions * 1000000 ))
+        # starts_at = now (UTC), expires_at = now + 2 months (UTC).
+        # macOS BSD `date -v` advances calendar months with end-of-month clamping.
+        starts_at=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        expires_at=$(date -u -v+2m +"%Y-%m-%d %H:%M:%S UTC")
+
+        echo "Opening allocation form for ${USERNAME}: ${tokens} tokens, expires ${expires_at}"
+        open "https://stackblitz.com/admin/user_token_allocations/new"
+        sleep 2
+
+        # Build the JS payload in bash so we control quoting; pass it as one argv
+        # to osascript and have AppleScript just hand it to `execute theTab javascript`.
+        # Username/tokens/date are sanitized inputs, but escape defensively anyway.
+        js_escape() { python3 -c "import json,sys;print(json.dumps(sys.argv[1]))" "$1"; }
+        js_user=$(js_escape "$USERNAME")
+        js_tokens=$(js_escape "$tokens")
+        js_expires=$(js_escape "$expires_at")
+        js_code="(function(){function setVal(id,v){var el=document.getElementById(id);if(!el)return false;el.focus();el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));el.blur();return true;}var ok=true;ok=setVal('user_token_allocation_user_id',${js_user})&&ok;ok=setVal('user_token_allocation_label','support-tokens')&&ok;ok=setVal('user_token_allocation_tokens',${js_tokens})&&ok;ok=setVal('user_token_allocation_expires_at',${js_expires})&&ok;return ok;})()"
+
+        /usr/bin/osascript - "$running_app" "$js_code" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  set appName to item 1 of argv
+  set jsCode to item 2 of argv
+  try
+    using terms from application "Google Chrome"
+      tell application appName
+        if (count of windows) is 0 then error "No windows"
+        set theTab to active tab of front window
+        execute theTab javascript jsCode
+      end tell
+    end using terms from
+  end try
+end run
+APPLESCRIPT
+      fi
+    fi
+    ;;
+
   *)
     # Cancel or closed dialog
     ;;
