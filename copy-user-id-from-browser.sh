@@ -475,9 +475,10 @@ echo "Copied UserID to clipboard: $USERID"
 SCRIPT_PARENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FRONT_NOTE_SCRIPT="$SCRIPT_PARENT_DIR/front-add-note.sh"
 
-# Offer to log a `/tr`- or `/ta`-style note back to Front via the API.
-# Prompts for the conversation URL/ID (clipboard pre-fills if it looks like
-# Front). Skip is the safe default — never auto-posts without confirmation.
+# Offer to log a `/ta`-style note back to the customer's Front contact via API.
+# Pre-fills the dialog with clipboard contents if they look like a Front URL,
+# conversation/contact ID, or email. Skip is the safe default — never auto-posts
+# without an explicit confirmation in the dialog.
 maybe_log_to_front() {
   local note="$1"
   if [[ ! -x "$FRONT_NOTE_SCRIPT" ]]; then
@@ -486,7 +487,10 @@ maybe_log_to_front() {
   local default=""
   local clip
   clip=$(pbpaste 2>/dev/null | head -c 500 | tr -d '\r\n' || true)
-  if [[ "$clip" =~ frontapp\.com.*cnv_ || "$clip" =~ ^cnv_[A-Za-z0-9]+$ ]]; then
+  if [[ "$clip" =~ frontapp\.com || \
+        "$clip" =~ ^cnv_[A-Za-z0-9]+$ || \
+        "$clip" =~ ^crd_[A-Za-z0-9]+$ || \
+        "$clip" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
     default="$clip"
   fi
   local hint
@@ -495,7 +499,7 @@ maybe_log_to_front() {
     -e '  set noteText to item 1 of argv' \
     -e '  set defaultVal to item 2 of argv' \
     -e '  tell application "System Events" to activate' \
-    -e '  set msg to "Note: " & noteText & return & return & "Front conversation URL or cnv_ ID:"' \
+    -e '  set msg to "Note: " & noteText & return & return & "Front URL, cnv/crd ID, or customer email:"' \
     -e '  display dialog msg with title "Log to Front" default answer defaultVal buttons {"Skip", "Post Note"} default button "Post Note" cancel button "Skip"' \
     -e '  return text returned of result' \
     -e 'end run' \

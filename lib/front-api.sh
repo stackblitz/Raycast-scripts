@@ -82,7 +82,7 @@ front_extract_cnv() {
 
 # Wrapper around curl that injects auth + base URL.
 # Usage: front_curl GET "/conversations/cnv_xxx/messages?limit=10"
-#        front_curl POST "/conversations/cnv_xxx/comments" --data '{"body":"hi"}'
+#        front_curl POST "/contacts/crd_xxx/notes" --data '{"body":"hi","author_id":"tea_xxx"}'
 front_curl() {
   local method="$1"; shift
   local path="$1"; shift
@@ -95,4 +95,92 @@ front_curl() {
     -H "Content-Type: application/json" \
     "$@" \
     "$url"
+}
+
+# Read an env var from cx-briefing/.env without exporting the whole file.
+front_env_var() {
+  local name="$1"
+  if [[ ! -f "$FRONT_ENV_FILE" ]]; then return 1; fi
+  grep -E "^${name}=" "$FRONT_ENV_FILE" | head -n1 | sed "s/^${name}=//; s/^[\"']//; s/[\"']$//"
+}
+
+# Resolve the teammate id to use as `author_id` on contact notes.
+# Resolution order:
+#   1. FRONT_AUTHOR_ID in cx-briefing/.env (cached, cheapest)
+#   2. FRONT_AUTHOR_EMAIL in cx-briefing/.env → look up via /teammates
+#   3. ${USER}@stackblitz.com (heuristic) → look up via /teammates
+# Front rejects bot/api-type teammates as note authors, so this MUST be a
+# human teammate (type: user).
+front_author_id() {
+  local cached
+  cached=$(front_env_var FRONT_AUTHOR_ID 2>/dev/null || true)
+  if [[ -n "$cached" && "$cached" =~ ^tea_ ]]; then
+    printf '%s' "$cached"
+    return 0
+  fi
+  local email
+  email=$(front_env_var FRONT_AUTHOR_EMAIL 2>/dev/null || true)
+  if [[ -z "$email" ]]; then
+    email="${USER}@stackblitz.com"
+  fi
+  TARGET_EMAIL="$email" front_curl GET "/teammates?limit=200" | python3 -c '
+import json, os, sys
+target = (os.environ.get("TARGET_EMAIL") or "").lower()
+data = json.loads(sys.stdin.read())
+for t in (data.get("_results") or []):
+    if (t.get("email") or "").lower() == target:
+        print(t.get("id") or "")
+        sys.exit()
+'
+}
+
+# Classify a string as Front input. Echoes one of:
+#   crd:crd_xxxxx  cnv:cnv_xxxxx  email:foo@bar.com
+front_classify_input() {
+  local s="$1"
+  if [[ "$s" =~ (crd_[A-Za-z0-9]+) ]]; then
+    printf 'crd:%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$s" =~ (cnv_[A-Za-z0-9]+) ]]; then
+    printf 'cnv:%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$s" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    printf 'email:%s' "$s"
+    return 0
+  fi
+  return 1
+}
+
+# Given a Front URL/cnv/crd/email, resolve to a contact id (crd_xxx).
+front_resolve_contact_id() {
+  local input="$1"
+  local kind
+  kind=$(front_classify_input "$input") || return 1
+  case "$kind" in
+    crd:*)
+      printf '%s' "${kind#crd:}"
+      ;;
+    cnv:*)
+      local cnv="${kind#cnv:}"
+      front_curl GET "/conversations/$cnv" | python3 -c '
+import json, re, sys
+data = json.loads(sys.stdin.read())
+link = ((data.get("recipient") or {}).get("_links") or {}).get("related", {}).get("contact", "")
+m = re.search(r"(crd_[A-Za-z0-9]+)", link or "")
+print(m.group(1) if m else "")
+'
+      ;;
+    email:*)
+      local email="${kind#email:}"
+      local enc
+      enc=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$email")
+      front_curl GET "/contacts/alt:email:$enc" | python3 -c '
+import json, sys
+data = json.loads(sys.stdin.read())
+print(data.get("id") or "")
+'
+      ;;
+  esac
 }
