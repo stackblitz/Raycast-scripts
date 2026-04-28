@@ -35,35 +35,65 @@ on run argv
         set pageTitle to title of theTab
         set pageText to ""
         try
-          if appName is "Arc" or appName is "Dia" then
-            set pageText to ""
-          else
-            set pageText to execute theTab javascript "
-              try {
-                const text = [];
-                document.querySelectorAll('tr').forEach(row => {
+          set pageText to execute theTab javascript "
+            try {
+              const text = [];
+
+              // New admin UI: profile page — .ud-stat-value--mono holds '#ID'
+              const monoStat = document.querySelector('.ud-stat-value--mono');
+              if (monoStat) {
+                const val = monoStat.textContent.trim().replace(/^#/, '');
+                if (/^\\d{4,}$/.test(val)) text.push('ID:' + val);
+              }
+
+              // New admin UI: search results page — XHR to first profile link in results table
+              // (skips the header link to the logged-in admin's own profile)
+              if (text.length === 0 && window.location.search.includes('commit=Filter')) {
+                const scope = document.querySelector('#index_table_users tbody') || document.querySelector('#index_table_users') || document.querySelector('table.index_table') || document;
+                const link = Array.from(scope.querySelectorAll('a[href]'))
+                  .find(function(a) {
+                    return /\\/admin\\/users\\/(?!new(?:[^a-z]|$))(?!new_)[^?#\\/]+$/.test(a.href);
+                  });
+                if (link) {
+                  const xhr = new XMLHttpRequest();
+                  xhr.open('GET', link.href, false);
+                  xhr.send();
+                  if (xhr.status === 200) {
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = xhr.responseText;
+                    const el = tmp.querySelector('.ud-stat-value--mono');
+                    if (el) {
+                      const val = el.textContent.trim().replace(/^#/, '');
+                      if (/^\\d{4,}$/.test(val)) text.push('ID:' + val);
+                    }
+                  }
+                }
+              }
+
+              // Old admin UI: table rows with numeric IDs in first cell
+              if (text.length === 0) {
+                document.querySelectorAll('tr').forEach(function(row) {
                   const cells = row.querySelectorAll('td');
                   if (cells.length > 0) {
                     const firstCell = cells[0].textContent.trim();
-                    if (/^\\d{1,10}$/.test(firstCell)) {
-                      text.push('ID:' + firstCell);
-                    }
+                    if (/^\\d{1,10}$/.test(firstCell)) text.push('ID:' + firstCell);
                   }
                 });
-                document.querySelectorAll('[data-user-id], [data-id]').forEach(el => {
-                  const uid = el.getAttribute('data-user-id') || el.getAttribute('data-id');
-                  if (uid && /^\\d{1,10}$/.test(uid)) text.push('ID:' + uid);
-                });
-                if (text.length === 0) {
-                  text.push(document.body.innerText || '');
-                }
-                text.join('\\n');
-              } catch (e) {
-                document.body.innerText || '';
               }
-            "
-            if pageText is missing value then set pageText to ""
-          end if
+
+              // Data attributes
+              document.querySelectorAll('[data-user-id], [data-id]').forEach(function(el) {
+                const uid = el.getAttribute('data-user-id') || el.getAttribute('data-id');
+                if (uid && /^\\d{1,10}$/.test(uid)) text.push('ID:' + uid);
+              });
+
+              if (text.length === 0) text.push(document.body.innerText || '');
+              text.join('\\n');
+            } catch (e) {
+              document.body.innerText || '';
+            }
+          "
+          if pageText is missing value then set pageText to ""
         end try
         return pageURL & "\\n${TITLE_MARK}\\n" & pageTitle & "\\n${TEXT_MARK}\\n" & pageText
       end tell
@@ -104,4 +134,3 @@ export async function captureActiveTabContent(): Promise<BrowserPageContent | nu
   }
   return null;
 }
-
