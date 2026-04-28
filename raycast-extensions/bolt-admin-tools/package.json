@@ -31,6 +31,13 @@
       "description": "Check Stripe promotion code details and associated coupon information.",
       "subtitle": "Stripe Tools",
       "mode": "view"
+    },
+    {
+      "name": "front-search",
+      "title": "Search Front Conversations",
+      "description": "Inline search of Front conversations by subject, customer email, or content. Click to open in Front.",
+      "subtitle": "Support Tools",
+      "mode": "view"
     }
   ],
   "dependencies": {
@@ -56,6 +63,14 @@
       "title": "Stripe API Key",
       "description": "Your Stripe API key (starts with sk_live_ or sk_test_)",
       "placeholder": "sk_live_..."
+    },
+    {
+      "name": "frontApiKey",
+      "type": "password",
+      "required": false,
+      "title": "Front API Key",
+      "description": "Personal API token from app.frontapp.com/settings/tools/api. Required for Search Front Conversations. Same value as FRONT_API_KEY in cx-briefing/.env.",
+      "placeholder": "fnt_api_..."
     }
   ],
   "scripts": {
