@@ -29,7 +29,7 @@ BOLT_ADMIN="${BOLT_NEW}/admin"
 if [[ -z "$ACTION" ]]; then
   CHOICE=$(/usr/bin/osascript <<'APPLESCRIPT'
 tell application "System Events" to activate
-set theList to {"Admin dashboard (bolt.new/admin)", "Admin users (by ID/email)", "Rate limits (user ID)", "Token reset (user ID)", "Sites and Deployments", "Static Hosting Sites", "Import ZIP", "Bolt DB", "Token Usage", "Snapshots", "Netlify Partner Accounts", "Org rate limits"}
+set theList to {"Admin dashboard (bolt.new/admin)", "Admin users (by ID/email)", "Rate limits (user ID)", "Token reset (user ID)", "Sites and Deployments", "Static Hosting Sites", "Import ZIP", "Bolt DB", "Token Usage", "Snapshots", "Netlify Partner Accounts", "Project Restore", "Collaboration Migrations", "Org rate limits"}
 set choiceResult to choose from list theList with title "Bolt Admin Hub" with prompt "Choose section" OK button name "Open" cancel button name "Cancel" default items {"Admin dashboard (bolt.new/admin)"}
 if choiceResult is false then
   return ""
@@ -56,6 +56,8 @@ APPLESCRIPT
     *"Token Usage"*)        ACTION="token-usage" ;;
     *"Snapshots"*)          ACTION="snapshots" ;;
     *"Netlify Partner"*)    ACTION="netlify" ;;
+    *"Project Restore"*)    ACTION="project-restore" ;;
+    *"Collaboration Migrations"*) ACTION="collaboration-migrations" ;;
     *"Org rate limits"*)    ACTION="org-rate-limits" ;;
     *)                      ACTION="dashboard" ;;
   esac
@@ -71,6 +73,22 @@ open_url() {
     echo "No URL for action: $ACTION"
     exit 1
   fi
+}
+
+# Prompt for a Project ID or slug. Returns the entered value on stdout
+# (URL-encoded so a slug with spaces/symbols works).
+prompt_project_id() {
+  local title="$1"
+  local default="${2:-}"
+  local val
+  val=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
+    -e "display dialog \"Enter Project ID or slug:\" with title \"${title}\" default answer \"${default}\" buttons {\"Cancel\", \"OK\"} default button \"OK\" cancel button \"Cancel\"" \
+    -e 'return text returned of result' 2>/dev/null) || true
+  val=$(printf '%s' "$val" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [[ -z "$val" ]]; then
+    return 1
+  fi
+  python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$val"
 }
 
 case "$ACTION" in
@@ -115,17 +133,17 @@ case "$ACTION" in
     esac
     ;;
   sites)
-    # https://bolt.new/admin/sites — Filter by project ID or user ID (createdBy)
+    # https://bolt.new/admin/sites?userId=<userId>&page=1
     if [[ -n "$ID" && "$ID" =~ ^[0-9]+$ ]]; then
-      open_url "${BOLT_ADMIN}/sites?q%5Bproject_id_eq%5D=${ID}&commit=Filter"
+      open_url "${BOLT_ADMIN}/sites?userId=${ID}&page=1"
     else
       open_url "${BOLT_ADMIN}/sites"
     fi
     ;;
   static-hosting)
-    # https://bolt.new/admin/static-hosting — Search by domain, project ID, or user ID
+    # https://bolt.new/admin/static-hosting?userId=<userId>&page=1
     if [[ -n "$ID" && "$ID" =~ ^[0-9]+$ ]]; then
-      open_url "${BOLT_ADMIN}/static-hosting?q%5Bproject_id_eq%5D=${ID}&commit=Filter"
+      open_url "${BOLT_ADMIN}/static-hosting?userId=${ID}&page=1"
     else
       open_url "${BOLT_ADMIN}/static-hosting"
     fi
@@ -135,35 +153,55 @@ case "$ACTION" in
     open_url "${BOLT_ADMIN}/import-zip"
     ;;
   bolt-db)
-    # https://bolt.new/admin/bolt-db — Supabase project integrations (project ID or slug)
-    if [[ -n "$ID" ]]; then
-      open_url "${BOLT_ADMIN}/bolt-db?q%5Bproject_id_eq%5D=${ID}&commit=Filter"
+    # https://bolt.new/admin/bolt-db?projectId=<projectId-or-slug> — needs project ID/slug
+    project_id=""
+    if [[ -n "$ID" && ! "$ID" =~ @ ]]; then
+      project_id=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$ID")
     else
-      open_url "${BOLT_ADMIN}/bolt-db"
+      project_id=$(prompt_project_id "Bolt DB") || { echo "Cancelled."; exit 0; }
     fi
+    open_url "${BOLT_ADMIN}/bolt-db?projectId=${project_id}"
     ;;
   token-usage)
-    # https://bolt.new/admin/token-usage — Filter by user ID or project ID
+    # https://bolt.new/admin/token-usage?userId=<userId>&organizationId=&projectId=&traceId=
     if [[ -n "$ID" && "$ID" =~ ^[0-9]+$ ]]; then
-      open_url "${BOLT_ADMIN}/token-usage?q%5Buser_id_eq%5D=${ID}&commit=Filter"
+      open_url "${BOLT_ADMIN}/token-usage?userId=${ID}&organizationId=&projectId=&traceId="
     else
       open_url "${BOLT_ADMIN}/token-usage"
     fi
     ;;
   snapshots)
-    # https://bolt.new/admin/snapshots — Filter by project ID or user ID
+    # https://bolt.new/admin/snapshots?projectId=&userId=<userId>
     if [[ -n "$ID" && "$ID" =~ ^[0-9]+$ ]]; then
-      open_url "${BOLT_ADMIN}/snapshots?q%5Bproject_id_eq%5D=${ID}&commit=Filter"
+      open_url "${BOLT_ADMIN}/snapshots?projectId=&userId=${ID}"
     else
       open_url "${BOLT_ADMIN}/snapshots"
     fi
     ;;
   netlify)
-    # https://bolt.new/admin/netlify-partner-accounts — Search by user ID, org ID, or account slug
+    # https://bolt.new/admin/netlify-partner-accounts?userId=<userId>
     if [[ -n "$ID" && "$ID" =~ ^[0-9]+$ ]]; then
-      open_url "${BOLT_ADMIN}/netlify-partner-accounts?q%5Buser_id_eq%5D=${ID}&commit=Filter"
+      open_url "${BOLT_ADMIN}/netlify-partner-accounts?userId=${ID}"
     else
       open_url "${BOLT_ADMIN}/netlify-partner-accounts"
+    fi
+    ;;
+  project-restore)
+    # https://bolt.new/admin/project-restore?projectId=<projectId-or-slug>
+    project_id=""
+    if [[ -n "$ID" && ! "$ID" =~ @ ]]; then
+      project_id=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$ID")
+    else
+      project_id=$(prompt_project_id "Project Restore") || { echo "Cancelled."; exit 0; }
+    fi
+    open_url "${BOLT_ADMIN}/project-restore?projectId=${project_id}"
+    ;;
+  collaboration-migrations)
+    # https://bolt.new/admin/collaboration-migrations?userId=<userId>&page=1
+    if [[ -n "$ID" && "$ID" =~ ^[0-9]+$ ]]; then
+      open_url "${BOLT_ADMIN}/collaboration-migrations?userId=${ID}&page=1"
+    else
+      open_url "${BOLT_ADMIN}/collaboration-migrations"
     fi
     ;;
   org-rate-limits)
