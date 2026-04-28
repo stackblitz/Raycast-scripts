@@ -461,10 +461,12 @@ echo "Page: $page_title"
 echo "URL: $page_url"
 echo "Copied UserID to clipboard: $USERID"
 
-# Post-action menu with rate limits and token reset options
+# Post-action menu with rate limits and token reset options.
+# Cancel must NOT exit non-zero (set -e + bolt-admin.sh's retry loop would
+# otherwise spawn this dialog up to max_attempts times).
 menu_choice=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
   -e "display dialog \"UserID: ${USERID}\n\nWhat would you like to do?\" with title \"Bolt Admin\" buttons {\"Cancel\", \"Reset Tokens\", \"Rate Limits\"} default button \"Rate Limits\" cancel button \"Cancel\"" \
-  -e 'return button returned of result')
+  -e 'return button returned of result' 2>/dev/null) || menu_choice=""
 
 case "$menu_choice" in
   "Rate Limits")
@@ -479,13 +481,13 @@ case "$menu_choice" in
     
     reset_choice=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
       -e "display dialog \"Choose token reset type for ${USERID}\" with title \"Reset Tokens\" buttons {\"Cancel\", \"All\", \"Monthly\"} default button \"Monthly\" cancel button \"Cancel\"" \
-      -e 'return button returned of result')
+      -e 'return button returned of result' 2>/dev/null) || reset_choice=""
     
     case "$reset_choice" in
       "Monthly")
         confirm=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
           -e "display dialog \"Confirm monthly token reset for ${USERID}?\" with title \"Confirm Reset\" buttons {\"Cancel\", \"Confirm\"} default button \"Confirm\" cancel button \"Cancel\"" \
-          -e 'return button returned of result')
+          -e 'return button returned of result' 2>/dev/null) || confirm=""
         
         if [[ "$confirm" == "Confirm" ]]; then
           # Reset monthly tokens
@@ -502,7 +504,7 @@ case "$menu_choice" in
       "All")
         confirm=$(/usr/bin/osascript -e 'tell application "System Events" to activate' \
           -e "display dialog \"Confirm ALL token reset (including rollovers) for ${USERID}?\" with title \"Confirm Reset\" buttons {\"Cancel\", \"Confirm\"} default button \"Confirm\" cancel button \"Cancel\"" \
-          -e 'return button returned of result')
+          -e 'return button returned of result' 2>/dev/null) || confirm=""
         
         if [[ "$confirm" == "Confirm" ]]; then
           # Reset all tokens
