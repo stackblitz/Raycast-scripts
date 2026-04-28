@@ -106,9 +106,10 @@ front_env_var() {
 
 # Resolve the teammate id to use as `author_id` on contact notes.
 # Resolution order:
-#   1. FRONT_AUTHOR_ID in cx-briefing/.env (cached, cheapest)
+#   1. FRONT_AUTHOR_ID in cx-briefing/.env (explicit, cheapest)
 #   2. FRONT_AUTHOR_EMAIL in cx-briefing/.env → look up via /teammates
-#   3. ${USER}@stackblitz.com (heuristic) → look up via /teammates
+#   3. macOS full name (`id -F`) → first name → firstname@stackblitz.com
+#   4. ${USER}@stackblitz.com (final fallback)
 # Front rejects bot/api-type teammates as note authors, so this MUST be a
 # human teammate (type: user).
 front_author_id() {
@@ -121,9 +122,18 @@ front_author_id() {
   local email
   email=$(front_env_var FRONT_AUTHOR_EMAIL 2>/dev/null || true)
   if [[ -z "$email" ]]; then
-    email="${USER}@stackblitz.com"
+    # Try macOS full name → first word, lowercased.
+    local first
+    first=$(id -F 2>/dev/null | awk '{print tolower($1)}')
+    if [[ -n "$first" && "$first" =~ ^[a-z]+$ ]]; then
+      email="${first}@stackblitz.com"
+    else
+      email="${USER}@stackblitz.com"
+    fi
   fi
-  TARGET_EMAIL="$email" front_curl GET "/teammates?limit=200" | python3 -c '
+  # Note: env vars on `cmd1 | cmd2` only apply to cmd1, so set TARGET_EMAIL
+  # on the python invocation (the consumer of the pipe).
+  front_curl GET "/teammates?limit=200" | TARGET_EMAIL="$email" python3 -c '
 import json, os, sys
 target = (os.environ.get("TARGET_EMAIL") or "").lower()
 data = json.loads(sys.stdin.read())
