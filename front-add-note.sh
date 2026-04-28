@@ -51,28 +51,15 @@ if [[ -z "$cnv_id" ]]; then
   exit 1
 fi
 
-# Front API requires an `author_id` (a teammate ID). Look up the API token's
-# teammate via /me and reuse for subsequent calls in this session.
-me_response=$(front_curl GET "/me")
-author_id=$(printf '%s' "$me_response" | python3 -c '
-import json, sys
-try:
-    print(json.loads(sys.stdin.read()).get("id") or "")
-except Exception:
-    print("")
-')
-
-if [[ -z "$author_id" ]]; then
-  echo "❌ Could not resolve teammate id from /me. Check FRONT_API_KEY."
-  printf '%s' "$me_response" | head -c 200 >&2
-  exit 1
-fi
-
-# POST the comment. Front escapes JSON so we let python build the body to
-# avoid manual quoting issues with newlines, quotes, etc.
-payload=$(NOTE="$NOTE_TEXT" AUTHOR="$author_id" python3 -c '
+# POST the comment with NO author_id. For company-level API tokens (the
+# common case), Front rejects `author_id: cmp_xxx` with 400 — looking up a
+# real teammate id requires the `teammates:read` scope which the briefing
+# token deliberately omits. Omitting author_id makes Front auto-attribute
+# to the token's implicit `tea_xxx` teammate, which lands the comment on
+# the conversation thread correctly.
+payload=$(NOTE="$NOTE_TEXT" python3 -c '
 import json, os, sys
-print(json.dumps({"author_id": os.environ["AUTHOR"], "body": os.environ["NOTE"]}))
+print(json.dumps({"body": os.environ["NOTE"]}))
 ')
 
 response=$(front_curl POST "/conversations/$cnv_id/comments" --data "$payload")

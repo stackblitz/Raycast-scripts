@@ -557,16 +557,8 @@ case "$menu_choice" in
           sleep 1
           # Show updated rate limits
           open "https://bolt.new/api/rate-limits/$USERID"
-          # Optional: log a /tr-style note back to Front via API.
-          tr_amt=$(/usr/bin/osascript \
-            -e 'tell application "System Events" to activate' \
-            -e "display dialog \"Reset amount in millions (leave blank to skip Front log):\" with title \"Front Note\" default answer \"\" buttons {\"Skip\", \"Continue\"} default button \"Continue\" cancel button \"Skip\"" \
-            -e 'return text returned of result' 2>/dev/null) || tr_amt=""
-          tr_amt=$(printf '%s' "$tr_amt" | tr -d '[:space:]')
-          if [[ -n "$tr_amt" ]]; then
-            tr_note="Token Reset $(date -u +"%Y-%m-%d") ${tr_amt}M tokens"
-            maybe_log_to_front "$tr_note"
-          fi
+          # Front /tr snippet handles the note; no API logging here to avoid
+          # double-prompting for the reset amount.
         else
           echo "Cancelled."
         fi
@@ -584,16 +576,8 @@ case "$menu_choice" in
           sleep 1
           # Show updated rate limits
           open "https://bolt.new/api/rate-limits/$USERID"
-          # Optional: log a /tr-style note back to Front via API.
-          tr_amt=$(/usr/bin/osascript \
-            -e 'tell application "System Events" to activate' \
-            -e "display dialog \"Total reset amount in millions (leave blank to skip Front log):\" with title \"Front Note\" default answer \"\" buttons {\"Skip\", \"Continue\"} default button \"Continue\" cancel button \"Skip\"" \
-            -e 'return text returned of result' 2>/dev/null) || tr_amt=""
-          tr_amt=$(printf '%s' "$tr_amt" | tr -d '[:space:]')
-          if [[ -n "$tr_amt" ]]; then
-            tr_note="Token Reset $(date -u +"%Y-%m-%d") ${tr_amt}M tokens (all rollovers cleared)"
-            maybe_log_to_front "$tr_note"
-          fi
+          # Front /tr snippet handles the note; no API logging here to avoid
+          # double-prompting for the reset amount.
         else
           echo "Cancelled."
         fi
