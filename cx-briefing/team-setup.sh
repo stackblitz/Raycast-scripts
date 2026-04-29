@@ -34,9 +34,14 @@ else
   echo "✓  Created .env from .env.example"
   echo ""
   echo "  👉  Open $ENV_FILE and fill in:"
-  echo "      ANTHROPIC_API_KEY  — your Claude API key"
-  echo "      FRONT_API_KEY      — shared team Front key"
-  echo "      (Slack + Sentry optional — add later)"
+  echo ""
+  echo "      FRONT_API_KEY      — shared team Front key (REQUIRED)"
+  echo "                           1Password: https://start.1password.com/open/i?a=IMDFBCMAOBHCPIKFUQOE4VXPZQ&v=dqhyyyld44do2bvsh267zn7y2e&i=o2pltfoze2uo2a4rxu57c2yeme&h=stackblitz.1password.com"
+  echo ""
+  echo "      ANTHROPIC_API_KEY  — only needed for the headless / cron path"
+  echo "      SLACK_BOT_TOKEN    — only needed if NOT using Claude Desktop"
+  echo "      SENTRY_AUTH_TOKEN  — optional, enables error section"
+  echo "      LINEAR_API_KEY     — optional, enables CX bug radar"
   echo ""
 fi
 
